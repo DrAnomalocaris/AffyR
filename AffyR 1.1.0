@@ -1,0 +1,624 @@
+#!/usr/bin/env python
+#title           :AffyR.py
+#description     :Uses a pData, Cel files or normalized CSV and hgTable as input to give the distances
+#                 of significant gene changed from telomeres and centromeres.
+#author          :Albert Lahat
+#date            :20130922
+#version         :1.1.0
+#python_version  :2.7.3
+#==============================================================================
+
+from pyper import *
+import numpy
+import xlsxwriter
+import os
+import inspect
+import glob
+
+def console(g = globals(), Message = ''):
+    ''' Makes a interactive python console untill typed 'end'
+    Has to be called Pybert.console(globals()). It is important
+    that the first parameter is globals(). A second string
+    parameter is optional to add comments.'''
+    print ('\n' + Message)
+    while True:
+        query = raw_input(">>> ")
+        if query == 'end':
+            break
+        try:
+            print(eval(query,g))
+        except Exception,e :
+            print(str(e))
+
+
+class AffyR:
+    def telTable(self):
+        '''Analyzes a hgTables.CSV file in directory and outputs a telomere length dictionary'''
+        try:
+            gapTable = open('hgTables', 'r').read().splitlines()
+        except:
+            print('    please get a "hgTables" from genome.ucsc.edu/cgi-bin/hgTables \n    in group choose "All Tables" and in table choose "gap"\n    and Save it (save page as) to the current directory.')
+            raw_input()
+            from sys import exit
+            exit()
+        chrList = []
+        for i in range(len(gapTable))[2:]:
+            gapTable[i] = gapTable[i].split('\t')
+            chrList.append([gapTable[i][1][3:], gapTable[i][2], gapTable[i][3], gapTable[i][7]])
+        #initiates ChrTel (telomeres) and ChrCen (centromeres) dictionaries
+        Chromosomes = []
+        for i in range(22):
+            Chromosomes.append(str(i + 1))
+        Chromosomes.append('X')
+        Chromosomes.append('Y')
+        ChrTel = {}
+        for i in Chromosomes:
+            ChrTel.update({i: []})
+        #Divides data into ChrTel and ChrCen dictionaries
+        for j in chrList:
+            if j[-1] == 'telomere':
+                ChrTel[j[0]].append(int(j[1]))
+                ChrTel[j[0]].append(int(j[2]))
+        for i in ChrTel:
+            ChrTel[i] = sorted(ChrTel[i])
+        #removes start and end of chromosomes from ChrTel
+        for i in ChrTel:
+            if not(i == '17'):
+                ChrTel[i] = ChrTel[i][1:-1]
+        #this adds beginning and end of chromosome 17 as it has small telomeres and
+        #are not repredented in the UCSC gap database
+        ChrTel['17'].append(0)
+        ChrTel['17'].append(78654742)
+        return ChrTel
+    def cenTable(self):
+        '''Analyzes a hgTables.CSV file in directory and outputs a centromere length dictionary'''
+        try:
+            gapTable = open('hgTables', 'r').read().splitlines()
+        except:
+            print('    please get a "hgTables" from genome.ucsc.edu/cgi-bin/hgTables \n    in group choose "All Tables" and in table choose "gap"\n    and Save it (save page as) to the current directory.')
+            raw_input()
+            from sys import exit
+            exit()
+        chrList = []
+        for i in range(len(gapTable))[2:]:
+            gapTable[i] = gapTable[i].split('\t')
+            chrList.append([gapTable[i][1][3:], gapTable[i][2], gapTable[i][3], gapTable[i][7]])
+        #initiates ChrTel (telomeres) and ChrCen (centromeres) dictionaries
+        Chromosomes = []
+        for i in range(22):
+            Chromosomes.append(str(i + 1))
+        Chromosomes.append('X')
+        Chromosomes.append('Y')
+        ChrCen = {}
+        for i in Chromosomes:
+            ChrCen.update({i: []})
+        #Divides data into ChrTel and ChrCen dictionaries
+        for j in chrList:
+            if j[-1] == 'centromere':
+                ChrCen[j[0]].append(int(j[1]))
+                ChrCen[j[0]].append(int(j[2]))
+        return ChrCen
+    def narrate(self, string):
+        '''Prints a number folowed by the string inputed, number
+        later increases by one'''
+        tosay=(' [' + str(self.narratorCount) +']'+' '*(4-len(str(self.narratorCount))) + string)
+        print(tosay)
+        self.narratorCount += 1
+    def AN(self):
+        '''uses narrates function to state the function name in use,
+        can be turned of by changing the value of self.autonarrate to
+        False'''
+        if self.autonarrate:
+            self.narrate(inspect.stack()[1][3])
+    def __init__(self):
+        #constants
+        self.autonarrate = True
+        self.narratorCount = 0
+        self.AN()
+        self.graphSaveFormat = 'pdf'
+        self.Directory = os.path.dirname(__file__)
+        #makes a results folder in current directory
+        self.resultsDirectory = self.Directory + '/results/'
+        self.r = R(use_numpy = True)
+        self.r('library(simpleaffy)')
+        self.r('library(affy)')
+        self.r('library(quantsmooth)')
+        self.r('library("pvclust")')
+        if not os.path.isdir(self.resultsDirectory):
+            os.makedirs(self.resultsDirectory)
+        self.notreadCEL = True
+        self.notgetLibrary = True
+        self.notnormalize = True
+        self.notttest = True
+        self.notfilter = True
+        self.notanotate = True
+        self.notpythonateR = True
+        self.notcalculatedistances = True
+        self.notreadNormalized = True
+        self.output = None
+        self.library = ''
+        self.autonarrate = True
+        self.readNormalizedEset=False
+    def readCEL(self, directory = None):
+        '''Uses R to read pData.txt and CEL files in direcrory, directory can
+        be changed.'''
+        self.AN()
+        if directory == None:
+            directory = self.Directory
+        self.notreadCEL = False
+        self.r('setwd("' + directory + '")')
+        self.r('pd <- read.AnnotatedDataFrame(filename="pData.txt")')
+        self.r('filenames <- rownames(pData(pd))')
+        self.r('affyData <- ReadAffy(filenames=filenames, phenoData=pd, sampleNames=pd$name)')
+        self.r('pD <-pData(affyData) ')
+    def readNormalized(self, directory = None):
+        '''Reads a normalized csv file, has to be run instead of readCEL() and normalize,  diractory can be changed'''
+        self.AN()
+        if directory == None:
+            directory = self.Directory
+        self.notnormalize = False
+        self.r('setwd("' + directory + '")')
+        csv = glob.glob('*.csv')
+        if len(csv) == 0:
+            self.narrate('Normalized csv not found.')
+            raw_input()
+            quit()
+        if len(csv) > 1:
+            for i in range(len(csv)):
+                print str(i+1) + ')  '+csv[i]
+            while true:
+                choise = int(raw_input('choose a file: '))
+                if choise in range(1,len(csv)):
+                    file = csv[choise]
+                    break
+        else:
+            f = csv[0]
+        self.r(r'rawtable <- read.csv("' + f + r'", sep="' + chr(9) + '")')
+        self.r('allProbesdataframe <- data.frame("featureNames" = rawtable[1], "probes" = rawtable[8],"names" = rawtable[9])')
+        self.r('table <- rawtable[-c(1:11)]')
+        self.r('matrix <- do.call(cbind,table)')
+        self.r('columnnames<-colnames(matrix)')
+        self.r('names <-new("AnnotatedDataFrame")')
+        self.r('prePdata <-data.frame(substr( columnnames,start = 1, stop=nchar(columnnames)-1))')
+        self.r('colnames(prePdata)[1]<-"type"')
+        self.r('prePdata[,"name"]<-columnnames')
+        self.r('row.names(prePdata)<-colnames(matrix)')
+        self.r('pData(names) <- prePdata')
+        self.r('step<-ExpressionSet(phenoData = names, assayData = matrix, annotation = "HsAgilentDesign026652.db")')
+        self.r('pD <-prePdata')
+        self.library = 'HsAgilentDesign026652'
+        self.r("library('" + self.library + ".db')")
+        self.readNormalizedEset=True
+    def getAnnotationCode(self):
+        '''returns the library name from an R expresionSet object.
+        The data has to be read from CEL files before, Or it will call
+        the readCEL() function automatically.'''
+        if self.notreadCEL:
+            self.readCEL()
+        self.AN()
+        affyMetaData = self.r('affyData')
+        annotation_start = affyMetaData.index('annotation=') + 11
+        annotation_end = affyMetaData.index('notes=') - 1
+        annotationCode = affyMetaData[annotation_start:annotation_end]
+        return annotationCode
+    def getLibrary(self, library = None):
+        '''Imports library, if None is inputed it will attempt to
+        retrive the library name'''
+        if library == None:
+            self.library = self.getAnnotationCode()
+        if self.notreadCEL:
+            self.readCEL()
+        self.notgetLibrary = False
+        self.AN()
+        if 'Error' in self.r("library('" + self.library + ".db')"):
+            print self.library + ' could not be imported.\n'
+    def normalize(self):
+        '''Normalizes the expresionSet object in R, if CEL files
+        have not been read it will automatically call readCEL().'''
+        if self.notreadCEL:
+            self.readCEL()
+        self.notnormalize = False
+        self.AN()
+        self.r('step <- rma(affyData)')
+    def pvclust(self):
+        '''make and shows a cluster plot of all samples, if data has not been normalized
+        will automatically call normalize()'''
+        if self.notnormalize:
+            self.normalize()
+        self.AN()
+        self.r('corClustAfter = pvclust(exprs(step), nboot=1, method.dist="correlation")')
+        self.r('windows()')
+        self.r('quartz()')
+        self.r('x11()')
+        if (self.readNormalizedEset):
+            self.r('plot(corClustAfter, main = "normalized")')
+        if not(self.notreadCEL):
+            self.r('corClust = pvclust(exprs(affyData), nboot=1, method.dist="correlation")')
+            self.r('par(mfrow=c(1,2))')
+            self.r('plot(corClust, main = "Prenormalized", )')
+            self.r('plot(corClustAfter, main = "Postnormalized")')
+            self.r('par(mfrow=c(1,1))')
+    def closePlot(self):
+        '''closes any R plot open'''
+        self.AN()
+        self.r('dev.off()')
+    def preparetabulateData(self):
+        '''prepares data to tabulate. necessary for ttest and for tabulating data'''
+        if self.notnormalize:
+            self.normalize()
+        self.AN()
+        self.indexList = [list(self.r['colnames(pD)'])]
+        self.indexList = self.indexList + (list(self.r['pD']))
+        self.types = []
+        index = self.indexList[0].index('type')
+        for i in range(len(self.indexList)):
+            self.indexList[i] = list(self.indexList[i])
+            self.indexList[i].insert(0, '    ' + str(i))
+            if not(self.indexList[i][index+1] in self.types):
+                self.types.append(self.indexList[i][index+1])
+        self.types.pop(0)
+        self.indexList[0][0] = ''
+    def tabulateData(self):
+        '''calls preparetabulateData() and presents elegantly all
+        the samples in a nicely formated table'''
+        def tPrint(NestedList, column_width = 'max len'):
+            if column_width == 'max len':
+                maxlist = []
+                for i in NestedList:
+                    linelen = []
+                    for j in i:
+                        linelen.append(len(str(j)))
+                    maxlist.append(max(linelen))
+                column_width = max(maxlist)
+            for i in NestedList:
+                toLine = []
+                for j in i:
+                    if len(str(j)) > column_width:
+                        toLine.append(str(j)[:column_width] + '\ ')
+                    else:
+                        toLine.append(str(j) +
+                        " " * (column_width - len(str(j))) + '| ')
+                toLine = ''.join(toLine)
+                print(toLine)
+        self.preparetabulateData()
+        self.AN()
+        tPrint(self.indexList)
+    def askRemove(self, Name = None):
+        '''takes input Name and returns an indexnumber tp use in R for accessing that sample
+        if no Name is used then will ask'''
+        self.preparetabulateData()
+        self.tabulateData()
+        self.AN()
+        if Name == None:
+            ignore = raw_input('\n Ignore any sample <name>? (leave blank to proceed): ')
+        else:
+            ignore = Name
+        if ignore == '':
+            ignoreNum = None
+            self.removeLoop = False
+        else:
+            ignoreNum = 1
+            for i in self.indexList:
+                if ignore == i[2]:
+                    break
+                else:
+                    ignoreNum += 1
+        return ignoreNum
+    def remove(self, Name = None):
+        '''Removes sample from R expresionSet, will automatically normalize data after being called'''
+        Number = self.askRemove(Name)
+        if not Number == None:
+            self.AN()
+            self.r('affyData <- affyData[,-(' + str(Number-2) + ')]')
+        self.normalize()
+    def savePlot(self):
+        '''makes and saves a clusterplot in a .pdf format into the result directory'''
+        if self.notnormalize:
+            self.normalize()
+        self.AN()
+        #Plots and saves a pre/postnormalized cluster plot
+        self.r('setwd("' + self.resultsDirectory + '")')
+        self.r('corClustAfter = pvclust(exprs(step), nboot=1, method.dist="correlation")')
+        self.r('pdf("Cluster plot.pdf")')
+        if not(self.notreadCEL):
+            self.r('corClust = pvclust(exprs(affyData), nboot=1, method.dist="correlation")')
+            self.r('par(mfrow=c(1,2))')
+            self.r('plot(corClust, main = "Pre-normalized")')
+            self.r('plot(corClustAfter, main = "Post-normalized")')
+            self.r('par(mfrow=c(1,1))')
+        if self.readNormalizedEset:
+            self.r('plot(corClustAfter, main = "normalized")')
+        self.r('dev.off()')
+    def savenormalizeddata(self):
+        '''saves normalized data into a .txt file into the results folder'''
+        self.AN()
+        self.r('setwd("' + self.resultsDirectory + '")')
+        self.r('write.exprs(step, file="normalised_expression.txt")')
+    def askCompareType(self, types=None):
+        '''takes types for the ttest comparison, if None is inputed then
+        it asks'''
+        if types == None:
+            self.preparetabulateData()
+        self.AN()
+        print('    types: ' + str(self.types).replace('[','').replace(']',''))
+        loop = True
+        while loop:
+            try:
+                inp = raw_input(' how to compare the samples <type separated by comma>?: ')
+                if inp == '':
+                    inp = self.types[0:2]
+                inp = inp.replace(' ', '')
+                inp = inp.split(',')
+                if inp[0] in self.types and inp[1] in self.types:
+                    print(' Will compare  ' + inp[0] + ' samples against ' + inp[1] + ' samples.')
+                    loop = False
+                else:
+                    print('    try again')
+            except:
+                print('    try again')
+        return inp
+    def ttest(self, inp = None):
+        '''performs ttest, it compares the types of samples from the inputed
+        list (a two string long list), if no list is inputed it will call
+        askCompareType(), If data is not normalized it will call normalize()'''
+        if self.notnormalize:
+            self.normalize()
+        self.inp = inp
+        if self.inp == None:
+            self.inp = self.askCompareType()
+        if self.inp[0] == inp[1]:
+            print 'You are comparing the same types mate: ' + self.inp[0] + ' against ' + self.inp[1]
+            self.inp = self.askCompareType()
+        self.notttest = False
+        self.AN()
+        self.SpreadSheetName = ' Vs '.join(self.inp) + '.xlsx'
+        self.GenomeMapName = ' Vs '.join(self.inp)
+        self.r('results<-pairwise.comparison(step, "type", c("' + self.inp[0] + '","' + self.inp[1] + '")) ')  ## ttest
+    def askpCrit(self):
+        '''asks what pCrit to use for filtering'''
+        self.AN()
+        #asks what p critical to filter data, data is filtered in R before transfer to python
+        while True:
+            pCrit = raw_input(' define p-critical (default is 0.05): ')
+            if pCrit == '':
+                pCrit = '0.05'
+            try:
+                float(pCrit)
+                break
+            except:
+                print('    try again')
+        return pCrit
+    def filter(self, pCrit = None):
+        '''filters the ttest results by pCrit, if no pCrit is inputed it ask.
+        if ttest has not been perform, it will automatically call ttest()'''
+        if pCrit == None:
+            pCrit = self.askpCrit()
+        if self.notttest:
+            self.ttest()
+        self.AN()
+        self.r('significant<-pairwise.filter(results, tt=' + str(pCrit) + ') ')  ##filtering
+        self.notfilter = False
+    def anotate(self):
+        '''will use R anotation library to anotate the filtered samples
+        will automatically call ttest(), getLibrary(), and dilter()'''
+        if self.notttest:
+            self.ttest()
+        #if self.notgetLibrary:
+            #self.getLibrary()
+        if self.notfilter:
+            self.filter()
+        self.notanotate = False
+        self.AN()
+        self.r('FC<-significant@means[,2]/significant@means[,1]')
+        ## getting anotations
+        if self.readNormalizedEset:
+            self.r('FeatureName <- data.frame("featureNames" = rownames(significant@means))')
+            self.r('probes <- as.character(merge(allProbesdataframe,FeatureName, by="featureNames")[2][,1])')
+        if not(self.notreadCEL):
+            self.r('probes <- rownames(significant@means)')
+        self.r('symbols <- mget(probes,' + self.library + 'SYMBOL,ifnotfound=NA)')
+        self.r('chr <- mget(probes, ' + self.library + 'CHR, ifnotfound = NA)')
+        self.r('chrloc <- mget(probes, ' + self.library + 'CHRLOC, ifnotfound = NA)')
+        self.r('chrend <- mget(probes, ' + self.library + 'CHRLOCEND, ifnotfound = NA)')
+        self.r('descriptions <- mget(probes,' + self.library + 'GENENAME,ifnotfound=NA)')
+    def pythonateR(self):
+        '''will take data and anotations from R and trasnslate it into python lists
+        will automatically call anotate() if data has not been anotated()'''
+        def toList(dict):
+            tolist = []
+            err = 1
+            for i in dict:
+                try:
+                    tolist.append(dict[i])
+                except:
+                    tolist.append('err: ' + str(err))
+                    err += 1
+            return tolist
+        if self.notanotate:
+            self.anotate()
+        self.notpythonateR = False
+        self.AN()
+        self.probes = list(self.r['probes'])
+        self.symbols = toList(self.r['symbols'])
+        self.chrom = toList(self.r['chr'])
+        self.chrloc = toList(self.r['chrloc'])
+        self.chrend = toList(self.r['chrend'])
+        self.description = toList(self.r['descriptions'])
+        self.P = list(self.r['significant@tt'])
+        self.FC = self.r['FC']
+    def calculatedistances(self):
+        '''will calculate the distance from telomere and centromeres,
+        will automatically call pythonateR()'''
+        ChrTel = self.telTable()
+        ChrCen = self.cenTable()
+        if self.notpythonateR:
+            self.pythonateR()
+        self.notcalculatedistances = False
+        self.AN()
+        output = []
+        #joins annotations into one nested list
+        for i in range(len(self.probes)):
+            output.append([])
+            output[-1].append(self.probes[i])
+            output[-1].append(self.P[i])
+            output[-1].append(self.FC[i])
+            output[-1].append(self.symbols[i])
+            output[-1].append(self.description[i])
+            output[-1].append(self.chrom[i])
+            if_int = False
+            #some probes returned a number of chromosome locations in a form of a numpt. ndarray
+            #this if and loops ensures that there are only one location per row by copying the rows
+            #but with different locations
+            if type(self.chrloc[i]) == int:
+                if_int = True
+                output[-1].append(self.chrloc[i])
+                output[-1].append(self.chrend[i])
+                #adds middle of gene
+                output[-1].append(abs(abs(self.chrloc[i])+abs(self.chrend[i]))/2)
+                #adds telomeres and centromere distances
+                telDist = [abs(output[-1][8] - ChrTel[str(output[-1][5])][0]), abs(output[-1][8] - ChrTel[output[-1][5]][1])]
+                output[-1].append(min(telDist))
+                cenDist = [abs(output[-1][8] - ChrCen[str(output[-1][5])][0]), abs(output[-1][8] - ChrCen[output[-1][5]][1])]
+                output[-1].append(min(cenDist))
+            elif type(self.chrloc[i]) == numpy.ndarray:
+                for n in range(len(self.chrloc[i])):
+                    if not(n == 0):
+                        output.append(output[-1][:-5])
+                    output[-1].append(self.chrloc[i][n])
+                    output[-1].append(self.chrend[i][n])
+                    #adds middle of gene
+                    output[-1].append(abs(abs(output[-1][6])+abs(output[-1][7]))/2)
+                    #adds telomeres and centromere distances
+                    telDist = [abs(output[-1][8] - ChrTel[str(output[-1][5])][0]), abs(output[-1][8] - ChrTel[output[-1][5]][1])]
+                    output[-1].append(min(telDist))
+                    cenDist = [abs(output[-1][8] - ChrCen[str(output[-1][5])][0]), abs(output[-1][8] - ChrCen[output[-1][5]][1])]
+                    output[-1].append(min(cenDist))
+        #column names
+        outputkey = ["Probe-ID", "P-value", "Log2(FC)", "Symbol", "Description",
+             "Chromosome", "Gene Start", "Gene End", "Gene middle",
+             "Distance from telomere", "Distance from Centromere"]
+        output.insert(0, outputkey)
+        self.output = output
+    def saveSpreadSheet(self):
+        '''saves data into an .XLSX SpreadSheet into the results folder.'''
+        if self.notcalculatedistances:
+            self.calculatedistances()
+        self.AN()
+        table = self.output
+        # Create a workbook and add a worksheet.
+        workbook = xlsxwriter.Workbook(self.resultsDirectory + self.SpreadSheetName)
+        worksheet = workbook.add_worksheet()
+        # Iterate over the data and write it out by iterating through all the rows and columns
+        row = 0
+        col = 0
+        #writes the table into the excel file
+        for x in range(len(table)):
+            for y in range(len(table[x])):
+                worksheet.write(x + 1, y, (table[x][y]))
+        workbook.close()
+    def saveCSV(self, table = None):
+        '''saves data into a .CSV table into the results directory'''
+        if table == None:
+            table = self.output
+        if self.notcalculatedistances:
+            self.calculatedistances()
+            table = self.output
+        self.AN()
+        #makes a cvs file similar to the excel file
+        CVS = ''
+        CVSData = []
+        for i in table:
+            #turns all the rows in output  into comma separated values (by removing [,],and ' no
+            #need to add commas for they are already in the list)
+            to_append = str(i)
+            to_append = to_append.replace("'", '')
+            to_append = to_append.replace('[', '')
+            to_append = to_append.replace(']', '')
+            CVSData.append(to_append)
+        CVSData = '\n'.join(CVSData)
+        CVSjoined = CVS + '\n' + CVSData
+        CVSFile = open(self.resultsDirectory + self.GenomeMapName + '.CSV', 'w')
+        CVSFile.write(CVSjoined)
+        CVSFile.close()
+    def saveIdeogram(self):
+        '''saves an ideogram pdf into the results folder'''
+        if self.notanotate:
+            self.anotate()
+        self.AN()
+        #this modifies the data and uses the quantsmooth library to make a genome map
+        #with probes marked with different colours (blue for decreased expression and
+        #red for increased expression)
+        self.r('setwd("' + self.resultsDirectory + '")')
+        self.r('fc<-significant@fc')
+        self.r('fc<-fc[!is.na(chr)]')
+        self.r('for (i in 1:length(chrloc)){if (typeof(chrloc[i])=="list"){chrloc[i]<-mean(unlist(chrloc[i]))}}')
+        self.r('chr<-data.frame(na.omit(unlist(chr)))')
+        self.r('chrloc<-data.frame(abs(na.omit(unlist(chrloc))))')
+        self.r('CHR<-merge(chr,chrloc,by="row.names")')
+        self.r('colnames(CHR)[2]<-"CHR"')
+        self.r('colnames(CHR)[3]<- "MapInfo"')
+        self.r('CHRred<-CHR')
+        self.r('CHRblue<-CHR')
+        self.r('for (i in length(CHR[,1]):1){if (fc[i]>0){CHRblue<-CHRblue[-i,]} else {CHRred<-CHRred[-i,]}}')
+        self.r('chromposred<-prepareGenomePlot(CHRred,paintCytobands = TRUE, organism="hsa",sexChromosomes=TRUE)')
+        self.r('dev.off()')
+        #needed to run prepareGenomePlot twice to get each colour coordinates making the first
+        #prepareGenomePlot into a empty plot which is saved as a pdf, so instead of leaving a
+        #blank plot in the result folder this removes it.
+        #os.remove(self.resultsDirectory + 'Rplots.pdf')
+        self.r('png("' + self.GenomeMapName + '")')
+        self.r('chromposblue<-prepareGenomePlot(CHRblue,paintCytobands = TRUE, organism="hsa",sexChromosomes=TRUE)')
+        self.r('points(chromposred[,2],chromposred[,1]+0.2,pch="|",col="red")')
+        self.r('points(chromposblue[,2],chromposblue[,1]+0.2,pch="|",col="blue")')
+        self.r('title(main="\n' + self.GenomeMapName + '\nGenome map of gene expression changes.\n blue = decreased, red = increased")')
+        self.r('dev.off()')
+        #os.renames(self.resultsDirectory + '/Rplots.pdf', self.resultsDirectory + '/' +  self.GenomeMapName + '.PNG')
+    def triSave(self):
+        '''Will call saveSpreadSheet, saveCSV(), and saveIdeogram().'''
+        self.saveSpreadSheet()
+        self.saveCSV()
+        self.saveIdeogram()
+    def analyzeCEL(self):
+        '''Will run from reading CEL files, looping through remove,
+        and saving data in ideograms and tables.'''
+        self.removeLoop = True
+        self.getLibrary()
+        while self.removeLoop:
+            self.pvclust()
+            self.normalize()
+            self.remove()
+            self.ttest()
+            self.closePlot()
+            self.filter()
+        self.savenormalizeddata()
+        self.savePlot()
+        self.triSave()
+    def analyzeCSV(self,compare = '',pcrit = ''):
+        '''Will run from reading a normalized csv file
+        and saving data in ideograms and tables. takes as input a list with the items to compare and the pcritical'''
+        self.AN()
+        self.readNormalized()
+        self.savePlot()
+        self.ttest(compare)
+        self.filter(pcrit)
+        self.triSave()
+    def testAllCombinationsCSV(self,pcrit = 0.05):
+        '''will read a normalized csv file and make all posible iterations and ttest. takes as input the pcritical desired
+        (default is 0.05).'''
+        self.readNormalized()
+        self.AN()
+        self.preparetabulateData()
+        types = self.types
+        combinations = []
+        while len(types)>1:
+            a = types.pop(0)
+            for j in types:
+                combinations.append([a,j])
+        for combination in combinations:
+            self.narrate('Comparing ' + combination[0] + ' with ' + combination[1] + '.')
+            self.analyzeCSV(combination, pcrit)
+            del self.r
+            self.__init__()
+
+
+help(AffyR)
