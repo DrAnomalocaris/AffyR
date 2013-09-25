@@ -2,8 +2,8 @@
 #description     :Uses a pData, Cel files or normalized CSV and hgTable as input to give the distances
 #                 of significant gene changed from telomeres and centromeres.
 #author          :Albert Lahat
-#date            :20130922
-#version         :1.1.0
+#date            :20130925
+#version         :1.1.1
 #python_version  :2.7.3
 #==============================================================================
 
@@ -29,6 +29,7 @@ Start by making an AffyR object.
 	import AffyR
 	affy = AffyR()
 
+If using CEL files a pData.txt is needed in the same directory, If using a normalized data file then the probeDict.p is needed.
 To completly analyze the data use CEL files in directory use the analyzeCEL() function. It will read, normalize, show cluster plot, as to remove any samples,if sample is removed it will loop through normalization clusterploting and sample removal. It will then ask what samples to compare, perform ttest, ask what pCritical to use, filter, anotate, calculate telomeric and centromeric distances and output data into a .CSV, .XLSX, and an ideogram.
 	
 	affy.analyzeCEL()
