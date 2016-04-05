@@ -48,7 +48,7 @@ To analyse in one batch all posible combinations of ttest comparisons testAllCom
 	affy.testAllCombinationsCSV()
 
 
-
+```
 class AffyR
  |  Methods defined here:
  |  
@@ -167,3 +167,4 @@ class AffyR
  |      performs ttest, it compares the types of samples from the inputed
  |      list (a two string long list), if no list is inputed it will call
  |      askCompareType(), If data is not normalized it will call normalize()
+```
