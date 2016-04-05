@@ -1,11 +1,7 @@
-#title           :AffyR.py
-#description     :Uses a pData, Cel files or normalized CSV and hgTable as input to give the distances
-#                 of significant gene changed from telomeres and centromeres.
-#author          :Albert Lahat
-#date            :20130925
-#version         :1.1.1
-#python_version  :2.7.3
-#==============================================================================
+#AffyR
+Uses a pData, Cel files or normalized CSV and hgTable as input to give the distances
+of significant gene changed from telomeres and centromeres.
+
 
 AffyR package
 
